@@ -31,9 +31,16 @@ endif()
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/runtime/version.lua.in"
-    "${CMAKE_CURRENT_SOURCE_DIR}/modules/runtime/version.lua"
+    "${CMAKE_CURRENT_BINARY_DIR}/modules/runtime/version.lua"
     @ONLY
 )
+
+set(GENERATED_VERSION_LUA "${CMAKE_CURRENT_BINARY_DIR}/modules/runtime/version.lua")
+set(GENERATED_DAEMON_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(RAMFS_STAGING_DIR "${CMAKE_CURRENT_BINARY_DIR}/ramfs")
+set(RAMFS_STAGING_MODULES_DIR "${RAMFS_STAGING_DIR}/modules")
+set(GENERATED_RAMFS_LUAC_H "${GENERATED_DAEMON_INCLUDE_DIR}/bin_ramfs_luac.h")
+set(GENERATED_INITRD_TAR_H "${GENERATED_DAEMON_INCLUDE_DIR}/bin_initrd_tar.h")
 
 file(GLOB_RECURSE DAEMON_LUA_MODULES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/*.lua"
@@ -127,17 +134,32 @@ set(SRCS_DAEMON
     main.c
     debug.c
     ramfs.c
-    bin_ramfs_luac.h
-    bin_initrd_tar.h
+    ${GENERATED_RAMFS_LUAC_H}
+    ${GENERATED_INITRD_TAR_H}
 )
 
 # Generate ramfs headers using loonjit
-add_custom_command(OUTPUT bin_ramfs_luac.h bin_initrd_tar.h
-    COMMAND $<TARGET_FILE:${RUNTIME_NAME}> build.lua
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+add_custom_command(OUTPUT ${GENERATED_RAMFS_LUAC_H} ${GENERATED_INITRD_TAR_H}
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RAMFS_STAGING_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DAEMON_INCLUDE_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${RAMFS_STAGING_MODULES_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules"
+        "${RAMFS_STAGING_MODULES_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${GENERATED_VERSION_LUA}"
+        "${RAMFS_STAGING_MODULES_DIR}/runtime/version.lua"
+    COMMAND $<TARGET_FILE:${RUNTIME_NAME}>
+        "${CMAKE_CURRENT_SOURCE_DIR}/build.lua"
+        "ramfs/modules"
+        "${GENERATED_RAMFS_LUAC_H}"
+        "${GENERATED_INITRD_TAR_H}"
+        "2"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     DEPENDS
         ${RUNTIME_NAME}
         ${DAEMON_LUA_MODULES}
+        ${GENERATED_VERSION_LUA}
         "${CMAKE_CURRENT_SOURCE_DIR}/build.lua"
     COMMENT "Generating embedded ramfs headers..."
 )
@@ -155,7 +177,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
-target_include_directories(${DAEMON_NAME} PRIVATE ${DAEMON_INCLUDE_DIRS})
+target_include_directories(${DAEMON_NAME} PRIVATE ${DAEMON_INCLUDE_DIRS} "${CMAKE_CURRENT_BINARY_DIR}")
 
 # Debug flag (target-based, not global)
 target_compile_definitions(${DAEMON_NAME} PRIVATE DEBUG)

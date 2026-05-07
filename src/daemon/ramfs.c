@@ -47,10 +47,10 @@ int ramfs_vfsinit(lua_State *L, const char *pathname, int argc,
 {
     static const char ramfs_luac[] = {
     /* NO compression */
-#include "bin_ramfs_luac.h"
+#include "generated/bin_ramfs_luac.h"
     };
     static const char initrd_tar[] = {
-#include "bin_initrd_tar.h"
+#include "generated/bin_initrd_tar.h"
     };
     int status = LUA_ERRERR;
     int err = -EDOM;
