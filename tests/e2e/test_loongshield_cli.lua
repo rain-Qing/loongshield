@@ -257,6 +257,19 @@ function test_subcommand_help_is_reachable_through_bundled_binary()
     assert_contains(rpm_output, "For other RPM repositories, pass --sbom-url explicitly.")
 end
 
+function test_seharden_missing_profile_returns_nonzero()
+    local missing_name = "this_config_does_not_exist_xyz"
+    local code, output = run_loongshield({
+        "seharden",
+        "--scan",
+        "--config",
+        missing_name,
+    })
+
+    assert(code == 1, "Expected missing profile to exit 1")
+    assert_contains(output, "Failed to read profile file '/etc/loongshield/seharden/" .. missing_name .. ".yml'")
+end
+
 function test_seharden_scan_dry_run_reinforce_and_level_selection_flow()
     local ok, err = pcall(function()
         T.setup("6", "development host")
