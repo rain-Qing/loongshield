@@ -78,12 +78,130 @@ function test_help_output_includes_examples_and_exit_codes()
             "Expected descriptive SEHarden header in help output")
         assert(output:find("--verbose           Show rule-level evidence", 1, true),
             "Expected verbose option in help output")
+        assert(output:find("--format <format>   Output format: text or json", 1, true),
+            "Expected output format option in help output")
         assert(not output:find("--debug", 1, true),
             "Expected help output to avoid the removed debug shortcut")
         assert(output:find("Exit Codes:", 1, true), "Expected exit code section in help output")
         assert(output:find("Examples:", 1, true), "Expected examples section in help output")
         assert(output:find("Current default: /etc/loongshield/seharden", 1, true),
             "Expected ruleset search path in help output")
+    end)
+end
+
+function test_json_format_outputs_machine_readable_report()
+    local cjson = require("cjson.safe")
+    local seen = {}
+
+    with_stubbed_cli({
+        profile = {
+            load = function(config_name)
+                seen.config_name = config_name
+                return {
+                    id = "agentos_baseline",
+                    default_level = "baseline",
+                    levels = {
+                        { id = "baseline" }
+                    }
+                }
+            end,
+            resolve_target_level = function(profile_data)
+                return profile_data.default_level
+            end,
+            get_rules_for_level = function(_, level)
+                seen.level = level
+                return {
+                    { id = "rule.1", desc = "demo rule" }
+                }
+            end,
+            get_manual_review_items_for_level = function(_, level)
+                seen.manual_level = level
+                return {
+                    {
+                        area = "operator",
+                        item = "Review external approval evidence.",
+                        reason = "External evidence is not host-local."
+                    }
+                }
+            end,
+        },
+        engine = {
+            run = function(mode, rules, opts)
+                seen.mode = mode
+                seen.rule_count = #rules
+                seen.quiet = opts.quiet
+                return 1, {
+                    mode = mode,
+                    dry_run = opts.dry_run or false,
+                    rules = {
+                        {
+                            id = "rule.1",
+                            desc = "demo rule",
+                            status = "FAIL",
+                            reason = "demo reason"
+                        }
+                    },
+                    summary = {
+                        passed = 0,
+                        fixed = 0,
+                        failed = 1,
+                        manual = 0,
+                        dry_run_pending = 0,
+                        total = 1,
+                    },
+                    exit_code = 1,
+                }
+            end,
+        }
+    }, function(cli)
+        local lines, ret = capture_print(function()
+            return cli.run({ "--config", "agentos_baseline", "--format=json" })
+        end)
+        local output = table.concat(lines, "\n")
+        local decoded, err = cjson.decode(output)
+
+        assert(ret == 1, "Expected JSON scan to preserve the engine exit code")
+        assert(decoded ~= nil, "Expected JSON output to decode: " .. tostring(err))
+        assert(decoded.schema_version == 1, "Expected JSON schema version")
+        assert(decoded.format == "json", "Expected JSON report to declare its format")
+        assert(decoded.profile == "agentos_baseline", "Expected profile id in JSON report")
+        assert(decoded.level == "baseline", "Expected resolved level in JSON report")
+        assert(decoded.summary.failed == 1, "Expected failed summary count in JSON report")
+        assert(decoded.rules[1].id == "rule.1", "Expected rule id in JSON report")
+        assert(decoded.rules[1].status == "FAIL", "Expected rule status in JSON report")
+        assert(decoded.manual_review[1].area == "operator", "Expected manual review items in JSON report")
+        assert(seen.config_name == "agentos_baseline", "Expected --config to reach profile.load")
+        assert(seen.level == "baseline", "Expected default level to reach rule selection")
+        assert(seen.manual_level == "baseline", "Expected default level to reach manual review filtering")
+        assert(seen.mode == "scan", "Expected scan mode")
+        assert(seen.rule_count == 1, "Expected rules to reach engine")
+        assert(seen.quiet == true, "Expected JSON mode to request quiet engine output")
+    end)
+end
+
+function test_json_format_parse_error_is_json()
+    local cjson = require("cjson.safe")
+
+    with_stubbed_cli({
+        profile = {
+            load = function() error("profile.load should not be called on parse errors") end,
+            get_rules_for_level = function() error("profile.get_rules_for_level should not be called on parse errors") end,
+        },
+        engine = {
+            run = function() error("engine.run should not be called on parse errors") end,
+        }
+    }, function(cli)
+        local lines, ret = capture_print(function()
+            return cli.run({ "--format", "json", "--bogus" })
+        end)
+        local decoded = cjson.decode(table.concat(lines, "\n"))
+
+        assert(ret == 1, "Expected parse error to return exit code 1")
+        assert(decoded ~= nil, "Expected parse error output to be JSON")
+        assert(decoded.schema_version == 1, "Expected JSON parse error schema version")
+        assert(decoded.format == "json", "Expected JSON parse error format")
+        assert(decoded.exit_code == 1, "Expected JSON parse error exit code")
+        assert(decoded.error == "Unknown option: --bogus", "Expected unknown option in JSON error")
     end)
 end
 

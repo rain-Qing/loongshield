@@ -41,7 +41,7 @@ function M.audit(rule, opts)
         return "PASS", string.format("[%s] %s", rule.id, rule.desc), probed_data, nil, probe_tasks
     end
 
-    if not (opts and opts.verbose) then
+    if not (opts and (opts.verbose or opts.quiet)) then
         log.warn("[%s] FAIL: %s - Reason: %s", rule.id, rule.desc, reason)
     end
     return "FAIL", string.format("[%s] %s: %s", rule.id, rule.desc, reason), probed_data, reason, probe_tasks

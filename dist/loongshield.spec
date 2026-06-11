@@ -108,13 +108,20 @@ unpack_vendor %{SOURCE18} deps/openssl/openssl
 %build
 mkdir build
 cd build
+loongshield_commit="%{?pkg_commit}"
+if [ -z "$loongshield_commit" ] && [ -f ../COMMIT ]; then
+    loongshield_commit="$(tr -d '\n' < ../COMMIT)"
+fi
+if [ -z "$loongshield_commit" ]; then
+    loongshield_commit="unknown"
+fi
 # Clear RPM hardened flags that break LuaJIT architecture detection
 # LuaJIT handles its own optimization and security flags
 unset CFLAGS CXXFLAGS FFLAGS FCFLAGS LDFLAGS
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DLOONGSHIELD_VERSION:STRING=%{version} \
-    -DLOONGSHIELD_COMMIT:STRING=%{!?pkg_commit:unknown}%{?pkg_commit}
+    -DLOONGSHIELD_COMMIT:STRING="$loongshield_commit"
 make %{?_smp_mflags}
 
 %install

@@ -352,6 +352,44 @@ function test_seharden_scan_dry_run_reinforce_and_level_selection_flow()
     end
 end
 
+function test_seharden_json_format_is_machine_readable()
+    local cjson = require('cjson.safe')
+    local ok, err = pcall(function()
+        T.setup('6', 'development host')
+
+        local code, output = run_loongshield({
+            'seharden',
+            '--scan',
+            '--config',
+            T.PROFILE,
+            '--format',
+            'json',
+        })
+        local decoded, decode_err = cjson.decode(output)
+
+        assert(code == 1, 'Expected JSON scan to preserve failing scan exit code')
+        assert(decoded ~= nil, 'Expected JSON output to decode: ' .. tostring(decode_err) .. '\n' .. output)
+        assert(decoded.schema_version == 1, 'Expected JSON schema version')
+        assert(decoded.format == 'json', 'Expected JSON report to declare its format')
+        assert(decoded.mode == 'scan', 'Expected JSON report mode')
+        assert(decoded.profile == 'loongshield_e2e', 'Expected profile id in JSON report')
+        assert(decoded.level == 'baseline', 'Expected default level in JSON report')
+        assert(decoded.exit_code == 1, 'Expected JSON report exit code')
+        assert(decoded.summary.failed == 1, 'Expected failing summary count')
+        assert(decoded.summary.total == 1, 'Expected one selected rule')
+        assert(decoded.rules[1].id == 'e2e.max_auth_tries', 'Expected failing rule id')
+        assert(decoded.rules[1].status == 'FAIL', 'Expected failing rule status')
+        assert(decoded.manual_review[1].area == 'operator_procedure', 'Expected manual review item')
+        assert(not output:find('%[INFO', 1), 'Expected JSON output not to include text log lines')
+    end)
+
+    T.teardown()
+
+    if not ok then
+        error(err, 0)
+    end
+end
+
 function test_rpm_command_handles_missing_package_before_sbom_fetch()
     local missing_name = 'loongshield-e2e-package-that-should-not-exist'
     local code, output = run_loongshield({
@@ -381,10 +419,10 @@ function test_bundled_seharden_profiles_scan_without_engine_errors()
         seharden_scan_case('cis_alinux_3', 'profiles/seharden/cis_alinux_3.yml', 'l2_server', 280, 4),
         seharden_scan_case('cis_alinux_3', 'profiles/seharden/cis_alinux_3.yml', 'l1_workstation', 167, 3),
         seharden_scan_case('cis_alinux_3', 'profiles/seharden/cis_alinux_3.yml', 'l2_workstation', 184, 3),
-        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l1_server', 48, 15),
-        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l2_server', 48, 15),
-        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l1_workstation', 48, 15),
-        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l2_workstation', 48, 15),
+        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l1_server', 53, 15),
+        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l2_server', 53, 15),
+        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l1_workstation', 53, 15),
+        seharden_scan_case('dengbao_alinux3_l3', 'profiles/seharden/dengbao_3.yml', 'l2_workstation', 53, 15),
     }
 
     for _, profile in ipairs(profiles) do

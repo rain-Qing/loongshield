@@ -4,6 +4,7 @@ local unistd = require("posix.unistd")
 log.usecolor = true
 log.outfile = nil
 log.level = "info"
+log.silent = false
 
 local modes = {
     { name = "trace", color = "\27[34m", },
@@ -87,6 +88,9 @@ for i, mode in ipairs(modes) do
 
     log[mode.name] = function(fmt, ...)
         if i < levels[log.level] then
+            return
+        end
+        if log.silent then
             return
         end
 

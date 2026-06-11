@@ -116,22 +116,30 @@ build_archive_from_filelist() {
     local prefix="$2"
     local archive_path="$3"
     local filelist="$4"
+    local extra_file="${5:-}"
+    local -a extra_args=()
 
     [[ -s "${filelist}" ]] || die "file list for ${archive_path} is empty"
+    if [[ -n "${extra_file}" ]]; then
+        [[ -f "${extra_file}" ]] || die "extra archive file not found: ${extra_file}"
+        extra_args=(-C "$(dirname "${extra_file}")" "$(basename "${extra_file}")")
+    fi
     rm -f "${archive_path}"
     tar -C "${base_dir}" \
         --null \
         --no-recursion \
         -T "${filelist}" \
+        "${extra_args[@]}" \
         --transform "s,^,${prefix}/," \
         -czf "${archive_path}"
 }
 
 build_main_archive() {
-    local filelist
+    local filelist commit_file commit
     local -a exclude_args
 
     filelist="${tmpdir}/source0.list"
+    commit_file="${tmpdir}/COMMIT"
     exclude_args=()
 
     while IFS=$'\t' read -r base path commit; do
@@ -139,7 +147,9 @@ build_main_archive() {
     done < <(manifest_entries)
 
     git -C "${repo_root}" ls-files -z -- . "${exclude_args[@]}" > "${filelist}"
-    build_archive_from_filelist "${repo_root}" "${project}-${version}" "${main_archive}" "${filelist}"
+    commit="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+    printf '%s\n' "${commit}" > "${commit_file}"
+    build_archive_from_filelist "${repo_root}" "${project}-${version}" "${main_archive}" "${filelist}" "${commit_file}"
 }
 
 build_vendor_archives() {

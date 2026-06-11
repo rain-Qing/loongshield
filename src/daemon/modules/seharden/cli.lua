@@ -1,6 +1,7 @@
 local log = require('runtime.log')
 local engine = require('seharden.engine')
 local profile = require('seharden.profile')
+local cjson = require('cjson.safe')
 local os = require('os')
 
 local M = {}
@@ -22,6 +23,7 @@ Options:
   --config <ruleset>  Profile name or YAML path to load. (Default: %s)
   --level <level>     Limit execution to a profile level (for example: l1_server).
   --dry-run           Preview reinforce actions without changing the system.
+  --format <format>   Output format: text or json. (Default: text)
   --verbose           Show rule-level evidence in a human-friendly format.
   --log-level <level> Set the logging level (trace, debug, info, warn, error).
   -h, --help          Show this help message.
@@ -116,6 +118,41 @@ local function emit_manual_review_summary(items)
     end
 end
 
+local function build_json_report(base)
+    local encoded, err = cjson.encode(base)
+    if not encoded then
+        return nil, err
+    end
+    return encoded
+end
+
+local function print_json_report(report)
+    report.schema_version = report.schema_version or 1
+    report.format = report.format or "json"
+
+    local encoded, err = build_json_report(report)
+    if encoded then
+        print(encoded)
+    else
+        print('{"schema_version":1,"format":"json","exit_code":1,"error":"failed to encode JSON report"}')
+    end
+end
+
+local function with_silent_logs(enabled, fn)
+    if not enabled then
+        return fn()
+    end
+
+    local saved_silent = log.silent
+    log.silent = true
+    local ok, a, b, c = pcall(fn)
+    log.silent = saved_silent
+    if not ok then
+        error(a, 2)
+    end
+    return a, b, c
+end
+
 local function parse_args(argv)
     local opts = {}
     local i = 1
@@ -124,10 +161,10 @@ local function parse_args(argv)
         local arg = argv[i]
         local inline_key, inline_value = arg:match("^%-%-([%w%-]+)=(.+)$")
 
-        if inline_key == "config" or inline_key == "level" or inline_key == "log-level" then
+        if inline_key == "config" or inline_key == "level" or inline_key == "log-level" or inline_key == "format" then
             opts[inline_key] = inline_value
             i = i + 1
-        elseif arg == "--config" or arg == "--log-level" or arg == "--level" then
+        elseif arg == "--config" or arg == "--log-level" or arg == "--level" or arg == "--format" then
             if i >= #argv then
                 return nil, string.format("Option '%s' requires a value.", arg)
             end
@@ -152,18 +189,33 @@ local function parse_args(argv)
     return opts
 end
 
+local function requested_json_format(argv)
+    for i = 1, #argv do
+        if argv[i] == "--format" and argv[i + 1] == "json" then
+            return true
+        end
+        local inline_value = argv[i]:match("^%-%-format=(.+)$")
+        if inline_value == "json" then
+            return true
+        end
+    end
+    return false
+end
+
 function M.run(argv)
     local opts, err = parse_args(argv)
     if not opts then
-        log.error(err)
-        print("")
-        print_usage()
+        if requested_json_format(argv) then
+            print_json_report({
+                exit_code = 1,
+                error = err,
+            })
+        else
+            log.error(err)
+            print("")
+            print_usage()
+        end
         return 1
-    end
-
-    local log_level = opts['log-level'] or os.getenv("LOG_LEVEL")
-    if log_level then
-        log.setLevel(log_level)
     end
 
     if opts.help then
@@ -171,56 +223,116 @@ function M.run(argv)
         return 0
     end
 
-    if opts.scan and opts.reinforce then
-        log.error("Options --scan and --reinforce are mutually exclusive.")
+    local output_format = opts.format or "text"
+    if output_format ~= "text" and output_format ~= "json" then
+        log.error("Unsupported output format '%s'. Expected 'text' or 'json'.", tostring(output_format))
         print("")
         print_usage()
         return 1
     end
+    local json_output = output_format == "json"
+
+    local log_level = opts['log-level'] or os.getenv("LOG_LEVEL")
+    if log_level then
+        with_silent_logs(json_output, function()
+            log.setLevel(log_level)
+        end)
+    end
+
+    if opts.scan and opts.reinforce then
+        if json_output then
+            print_json_report({
+                exit_code = 1,
+                error = "Options --scan and --reinforce are mutually exclusive.",
+            })
+        else
+            log.error("Options --scan and --reinforce are mutually exclusive.")
+            print("")
+            print_usage()
+        end
+        return 1
+    end
 
     local mode = opts.reinforce and "reinforce" or "scan"
-    if opts["dry-run"] and mode ~= "reinforce" then
+    if opts["dry-run"] and mode ~= "reinforce" and not json_output then
         log.warn("Option '--dry-run' only affects --reinforce mode. Continuing with scan.")
     end
 
     local config_name = opts.config or DEFAULT_CONFIG
     local target_level = opts.level
 
-    local profile_data = profile.load(config_name)
+    local profile_data = with_silent_logs(json_output, function()
+        return profile.load(config_name)
+    end)
     if not profile_data then
+        if json_output then
+            print_json_report({
+                exit_code = 1,
+                mode = mode,
+                profile = config_name,
+                level = target_level,
+                error = string.format("Failed to load profile '%s'.", config_name),
+            })
+        end
         return 1
     end
 
     local effective_level = target_level
     if type(profile.resolve_target_level) == "function" then
-        local resolved_level, level_err = profile.resolve_target_level(profile_data, target_level)
+        local resolved_level, level_err = with_silent_logs(json_output, function()
+            return profile.resolve_target_level(profile_data, target_level)
+        end)
         if resolved_level == nil and level_err ~= nil then
+            if json_output then
+                print_json_report({
+                    exit_code = 1,
+                    mode = mode,
+                    profile = profile_data.id or config_name,
+                    level = target_level,
+                    error = tostring(level_err),
+                })
+            end
             return 1
         end
         effective_level = resolved_level
     end
 
-    local rules_to_run = profile.get_rules_for_level(profile_data, effective_level)
+    local rules_to_run, rules_err = with_silent_logs(json_output, function()
+        return profile.get_rules_for_level(profile_data, effective_level)
+    end)
     if not rules_to_run then
         local available_levels = format_level_ids(profile_data)
-        if target_level and available_levels then
+        if json_output then
+            print_json_report({
+                exit_code = 1,
+                mode = mode,
+                profile = profile_data.id or config_name,
+                level = effective_level or "all",
+                available_levels = get_level_ids(profile_data),
+                error = rules_err or string.format(
+                    "No rules available for level '%s'.",
+                    tostring(effective_level or "all")),
+            })
+        elseif target_level and available_levels then
             log.info("Available levels for profile '%s': %s",
                 profile_data.id or config_name, available_levels)
         end
         return 1
     end
 
-    local manual_review_items = get_manual_review_items(profile_data, effective_level)
+    local manual_review_items = with_silent_logs(json_output, function()
+        return get_manual_review_items(profile_data, effective_level)
+    end)
     local manual_review_suffix = format_manual_review_suffix(mode, #manual_review_items)
 
-    if opts.verbose then
+    if opts.verbose and not json_output then
         print(string.format("%s: profile='%s', level='%s', %d rule(s)%s",
             log.style("SEHarden " .. mode, "bold", "cyan"),
             profile_data.id or config_name,
             effective_level or "all",
             #rules_to_run,
             manual_review_suffix))
-    else
+    elseif not json_output then
         log.info("Running SEHarden %s with profile '%s' at level '%s' (%d rule(s)%s).",
             mode,
             profile_data.id or config_name,
@@ -229,12 +341,20 @@ function M.run(argv)
             manual_review_suffix)
     end
 
-    local exit_code = engine.run(mode, rules_to_run, {
-        dry_run = opts["dry-run"],
-        verbose = opts.verbose or false,
-    })
+    local exit_code, report = with_silent_logs(json_output, function()
+        return engine.run(mode, rules_to_run, {
+            dry_run = opts["dry-run"],
+            verbose = opts.verbose or false,
+            quiet = json_output,
+        })
+    end)
 
-    if mode == "scan" then
+    if json_output then
+        report.profile = profile_data.id or config_name
+        report.level = effective_level or "all"
+        report.manual_review = mode == "scan" and manual_review_items or {}
+        print_json_report(report)
+    elseif mode == "scan" then
         emit_manual_review_summary(manual_review_items)
     end
 

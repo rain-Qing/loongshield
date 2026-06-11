@@ -32,6 +32,7 @@ Bundled profile examples in this repository live under `profiles/seharden/`.
 - `--config <ruleset>`
 - `--level <level>`
 - `--dry-run`
+- `--format <text|json>`: output format. `text` is the default.
 - `--verbose`: print rule-by-rule results with compact evidence intended for operators.
 - `--log-level <trace|debug|info|warn|error>`
 - `-h`, `--help`
@@ -39,6 +40,7 @@ Bundled profile examples in this repository live under `profiles/seharden/`.
 ## Compatibility Notes
 
 - Stable within a major release: documented mode flags, documented option meanings, documented exit codes, and the documented meaning of SEHarden profile fields consumed by this command.
+- `--format json` is the machine-readable output contract for automation.
 - `--verbose` output is for operators, not a machine-readable API. Exact wording, colors, ordering, and evidence formatting may change between compatible releases.
 - `--log-level debug` exposes developer-oriented trace output and should be treated as less stable than the normal operator-facing CLI contract.
 - If automation depends on a specific bundled profile, pass `--config` explicitly instead of relying on the default profile choice.
@@ -48,6 +50,7 @@ Bundled profile examples in this repository live under `profiles/seharden/`.
 
 - Default output keeps the standard logger format and final summary.
 - `--verbose` switches to a plain-text, human-friendly rule report with focused probe evidence.
+- `--format json` prints one JSON object to stdout with `schema_version`, `format`, `mode`, `profile`, `level`, `dry_run`, `rules`, `summary`, `manual_review`, and `exit_code` fields. Each rule item includes `id`, `desc`, `status`, and, when available, `reason`.
 - Scan output appends a manual-review summary when the selected profile/level declares `manual_review_required` items.
 - `--log-level debug` keeps the underlying developer-oriented execution trace when you need full probe and engine diagnostics.
 
@@ -61,6 +64,7 @@ Bundled profile examples in this repository live under `profiles/seharden/`.
 ```sh
 loongshield seharden
 loongshield seharden --config agentos_baseline
+loongshield seharden --config agentos_baseline --format json
 loongshield seharden --config agentos_baseline --verbose
 loongshield seharden --config agentos_baseline --log-level debug
 loongshield seharden --config cis_alinux_3 --level l1_server
