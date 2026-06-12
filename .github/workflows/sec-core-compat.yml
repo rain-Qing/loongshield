@@ -9,13 +9,6 @@ on:
             - "VERSION"
             - "CHANGELOG.md"
             - "dist/**"
-            - "docs/reference/seharden-cli.md"
-            - "profiles/seharden/**"
-            - "src/daemon/main.c"
-            - "src/daemon/modules/init.lua"
-            - "src/daemon/modules/seharden/**"
-            - "tests/e2e/**"
-            - "tests/unit/seharden/**"
             - ".github/workflows/sec-core-compat.yml"
     pull_request:
         branches: [main]
@@ -23,16 +16,7 @@ on:
             - "VERSION"
             - "CHANGELOG.md"
             - "dist/**"
-            - "docs/reference/seharden-cli.md"
-            - "profiles/seharden/**"
-            - "src/daemon/main.c"
-            - "src/daemon/modules/init.lua"
-            - "src/daemon/modules/seharden/**"
-            - "tests/e2e/**"
-            - "tests/unit/seharden/**"
             - ".github/workflows/sec-core-compat.yml"
-    schedule:
-        - cron: "0 18 * * *"
     workflow_dispatch:
 
 concurrency:
@@ -56,97 +40,97 @@ jobs:
         steps:
             - name: Configure mirrors and install bootstrap tools
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  sed -i -e "s/cloud.aliyuncs/aliyun/g" /etc/yum.repos.d/*.repo
-                  dnf install -y tar git sudo make rpm-build rpmdevtools \
-                      gcc gcc-c++ clang llvm openssl-devel libseccomp-devel \
-                      bubblewrap python3-pip
+                sed -i -e "s/cloud.aliyuncs/aliyun/g" /etc/yum.repos.d/*.repo
+                dnf install -y tar git sudo make rpm-build rpmdevtools \
+                    gcc gcc-c++ clang llvm openssl-devel libseccomp-devel \
+                    bubblewrap python3-pip
 
             - name: Checkout loongshield
               uses: actions/checkout@v4
               with:
-                  path: loongshield
-                  submodules: recursive
+                path: loongshield
+                submodules: recursive
 
             - name: Checkout sec-core main
               uses: actions/checkout@v4
               with:
-                  repository: alibaba/anolisa
-                  ref: main
-                  path: anolisa
+                repository: alibaba/anolisa
+                ref: main
+                path: anolisa
 
             - uses: dtolnay/rust-toolchain@stable
               with:
-                  toolchain: "1.93.0"
+                toolchain: "1.93.0"
 
             - uses: astral-sh/setup-uv@v8.0.0
               with:
-                  python-version: "3.11.6"
+                python-version: "3.11.6"
 
             - uses: actions/setup-node@v4
               with:
-                  node-version: "20"
+                node-version: "20"
 
             - name: Install loongshield build dependencies
               run: make -C loongshield ALLOW_UNSUPPORTED_HOST=1 buildreqs
 
             - name: Build sec-core RPM from main
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  ./anolisa/scripts/rpm-build.sh agent-sec-core
-                  find ./anolisa/scripts/rpmbuild/RPMS -type f -name "*.rpm" | sort
+                ./anolisa/scripts/rpm-build.sh agent-sec-core
+                find ./anolisa/scripts/rpmbuild/RPMS -type f -name "*.rpm" | sort
 
             - name: Install sec-core RPMs
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  mapfile -t rpms < <(find ./anolisa/scripts/rpmbuild/RPMS -type f -name "*.rpm" | sort)
-                  test "${#rpms[@]}" -gt 0
-                  dnf install -y "${rpms[@]}"
+                mapfile -t rpms < <(find ./anolisa/scripts/rpmbuild/RPMS -type f -name "*.rpm" | sort)
+                test "${#rpms[@]}" -gt 0
+                dnf install -y "${rpms[@]}"
 
-                  agent-sec-cli --help
-                  linux-sandbox --help
+                agent-sec-cli --help
+                linux-sandbox --help
 
             - name: Build loongshield RPM
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  make -C loongshield rpm
-                  find ./loongshield/build/rpmbuild/RPMS -type f -name "*.rpm" | sort
+                make -C loongshield rpm
+                find ./loongshield/build/rpmbuild/RPMS -type f -name "*.rpm" | sort
 
             - name: Install loongshield RPMs
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  mapfile -t rpms < <(find ./loongshield/build/rpmbuild/RPMS -type f -name "*.rpm" | sort)
-                  test "${#rpms[@]}" -gt 0
-                  dnf install -y "${rpms[@]}"
+                mapfile -t rpms < <(find ./loongshield/build/rpmbuild/RPMS -type f -name "*.rpm" | sort)
+                test "${#rpms[@]}" -gt 0
+                dnf install -y "${rpms[@]}"
 
-                  rpm -qa | sort | grep -E "^(agent-sec|loongshield)"
-                  loongshield version
+                rpm -qa | sort | grep -E "^(agent-sec|loongshield)"
+                loongshield version
 
             - name: Run sec-core E2E against installed loongshield
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  rpm -e agent-sec-skills --nodeps || true
-                  make -C anolisa/src/agent-sec-core test-e2e-rpm
+                rpm -e agent-sec-skills --nodeps || true
+                make -C anolisa/src/agent-sec-core test-e2e-rpm
 
             - name: Run loongshield E2E against installed RPMs
               run: |
-                  set -euo pipefail
-                  set -x
+                set -euo pipefail
+                set -x
 
-                  cd loongshield
-                  LOONGSHIELD_SRC_DIR="$PWD" \
-                  LOONGSHIELD_BIN=/usr/sbin/loongshield \
-                  LOONGSHIELD_E2E_BIN=/usr/sbin/loongshield \
-                      /usr/sbin/loonjit tests/run.lua --type e2e
+                cd loongshield
+                LOONGSHIELD_SRC_DIR="$PWD" \
+                LOONGSHIELD_BIN=/usr/sbin/loongshield \
+                LOONGSHIELD_E2E_BIN=/usr/sbin/loongshield \
+                    /usr/sbin/loonjit tests/run.lua --type e2e
