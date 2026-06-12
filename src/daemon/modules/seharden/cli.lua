@@ -118,23 +118,129 @@ local function emit_manual_review_summary(items)
     end
 end
 
-local function build_json_report(base)
-    local encoded, err = cjson.encode(base)
-    if not encoded then
-        return nil, err
+local function count_items(items)
+    if type(items) ~= "table" then
+        return 0
     end
-    return encoded
+    return #items
+end
+
+local function build_json_report(base)
+    local field_order = {
+        { "schema_version" },
+        { "format" },
+        { "tool" },
+        { "command" },
+        { "status" },
+        { "mode" },
+        { "profile" },
+        { "level" },
+        { "dry_run" },
+        { "request" },
+        { "rules", "array" },
+        { "rule_count" },
+        { "summary" },
+        { "manual_review", "array" },
+        { "manual_review_count" },
+        { "available_levels", "nullable_array" },
+        { "exit_code" },
+        { "error" },
+    }
+    local parts = {}
+
+    for _, field in ipairs(field_order) do
+        local key = field[1]
+        local kind = field[2]
+        local value = base[key]
+        local encoded
+
+        if kind == "array" then
+            encoded = count_items(value) == 0 and "[]" or cjson.encode(value)
+        elseif kind == "nullable_array" and value ~= cjson.null then
+            encoded = count_items(value) == 0 and "[]" or cjson.encode(value)
+        else
+            encoded = cjson.encode(value)
+        end
+
+        if not encoded then
+            return nil, string.format("failed to encode JSON field '%s'", key)
+        end
+        parts[#parts + 1] = string.format("%s:%s", cjson.encode(key), encoded)
+    end
+
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function report_status(exit_code)
+    return exit_code == 0 and "passed" or "failed"
+end
+
+local function json_nullable(value)
+    if value == nil then
+        return cjson.null
+    end
+    return value
+end
+
+local function normalize_summary(summary, total)
+    summary = type(summary) == "table" and summary or {}
+    return {
+        passed = tonumber(summary.passed) or 0,
+        fixed = tonumber(summary.fixed) or 0,
+        failed = tonumber(summary.failed) or 0,
+        manual = tonumber(summary.manual) or 0,
+        dry_run_pending = tonumber(summary.dry_run_pending) or 0,
+        total = tonumber(summary.total) or total,
+    }
+end
+
+local function build_json_envelope(fields)
+    local exit_code = fields.exit_code or 1
+    local mode = fields.mode or "scan"
+    local effective_level = fields.level or "all"
+    local rules = fields.rules or {}
+    local summary = normalize_summary(fields.summary, count_items(rules))
+    local manual_review = fields.manual_review or {}
+    local profile_id = fields.profile
+    local config = fields.config or profile_id
+
+    return {
+        schema_version = 1,
+        format = "json",
+        tool = "loongshield",
+        command = "seharden",
+        status = fields.status or report_status(exit_code),
+        mode = mode,
+        profile = json_nullable(profile_id),
+        level = effective_level,
+        dry_run = fields.dry_run or false,
+        request = {
+            mode = mode,
+            config = json_nullable(config),
+            profile = json_nullable(profile_id),
+            level = effective_level,
+            requested_level = json_nullable(fields.requested_level),
+            dry_run = fields.dry_run or false,
+        },
+        rules = rules,
+        rule_count = count_items(rules),
+        summary = summary,
+        manual_review = manual_review,
+        manual_review_count = count_items(manual_review),
+        available_levels = json_nullable(fields.available_levels),
+        exit_code = exit_code,
+        error = json_nullable(fields.error),
+    }
 end
 
 local function print_json_report(report)
-    report.schema_version = report.schema_version or 1
-    report.format = report.format or "json"
+    report = build_json_envelope(report)
 
     local encoded, err = build_json_report(report)
     if encoded then
         print(encoded)
     else
-        print('{"schema_version":1,"format":"json","exit_code":1,"error":"failed to encode JSON report"}')
+        print('{"schema_version":1,"format":"json","tool":"loongshield","command":"seharden","status":"failed","mode":"scan","profile":null,"level":"all","dry_run":false,"request":{"mode":"scan","config":null,"profile":null,"level":"all","requested_level":null,"dry_run":false},"rules":[],"rule_count":0,"summary":{"passed":0,"fixed":0,"failed":0,"manual":0,"dry_run_pending":0,"total":0},"manual_review":[],"manual_review_count":0,"available_levels":null,"exit_code":1,"error":"failed to encode JSON report"}')
     end
 end
 
@@ -225,9 +331,19 @@ function M.run(argv)
 
     local output_format = opts.format or "text"
     if output_format ~= "text" and output_format ~= "json" then
-        log.error("Unsupported output format '%s'. Expected 'text' or 'json'.", tostring(output_format))
-        print("")
-        print_usage()
+        local format_err = string.format(
+            "Unsupported output format '%s'. Expected 'text' or 'json'.",
+            tostring(output_format))
+        if requested_json_format(argv) then
+            print_json_report({
+                exit_code = 1,
+                error = format_err,
+            })
+        else
+            log.error(format_err)
+            print("")
+            print_usage()
+        end
         return 1
     end
     local json_output = output_format == "json"
@@ -269,8 +385,11 @@ function M.run(argv)
             print_json_report({
                 exit_code = 1,
                 mode = mode,
+                config = config_name,
                 profile = config_name,
-                level = target_level,
+                level = target_level or "all",
+                requested_level = target_level,
+                dry_run = opts["dry-run"] or false,
                 error = string.format("Failed to load profile '%s'.", config_name),
             })
         end
@@ -287,8 +406,11 @@ function M.run(argv)
                 print_json_report({
                     exit_code = 1,
                     mode = mode,
+                    config = config_name,
                     profile = profile_data.id or config_name,
-                    level = target_level,
+                    level = target_level or "all",
+                    requested_level = target_level,
+                    dry_run = opts["dry-run"] or false,
                     error = tostring(level_err),
                 })
             end
@@ -306,8 +428,11 @@ function M.run(argv)
             print_json_report({
                 exit_code = 1,
                 mode = mode,
+                config = config_name,
                 profile = profile_data.id or config_name,
                 level = effective_level or "all",
+                requested_level = target_level,
+                dry_run = opts["dry-run"] or false,
                 available_levels = get_level_ids(profile_data),
                 error = rules_err or string.format(
                     "No rules available for level '%s'.",
@@ -350,8 +475,10 @@ function M.run(argv)
     end)
 
     if json_output then
+        report.config = config_name
         report.profile = profile_data.id or config_name
         report.level = effective_level or "all"
+        report.requested_level = target_level
         report.manual_review = mode == "scan" and manual_review_items or {}
         print_json_report(report)
     elseif mode == "scan" then

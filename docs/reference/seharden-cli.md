@@ -50,9 +50,36 @@ Bundled profile examples in this repository live under `profiles/seharden/`.
 
 - Default output keeps the standard logger format and final summary.
 - `--verbose` switches to a plain-text, human-friendly rule report with focused probe evidence.
-- `--format json` prints one JSON object to stdout with `schema_version`, `format`, `mode`, `profile`, `level`, `dry_run`, `rules`, `summary`, `manual_review`, and `exit_code` fields. Each rule item includes `id`, `desc`, `status`, and, when available, `reason`.
+- `--format json` prints one JSON object to stdout. This is the stable v1 automation contract.
 - Scan output appends a manual-review summary when the selected profile/level declares `manual_review_required` items.
 - `--log-level debug` keeps the underlying developer-oriented execution trace when you need full probe and engine diagnostics.
+
+### JSON Contract v1
+
+Automation should call `loongshield seharden --format json` and parse only the JSON object. Do not parse the default text or `--verbose` output.
+
+Stable top-level fields:
+
+- `schema_version`: integer. Current value: `1`.
+- `format`: string. Current value: `json`.
+- `tool`: string. Current value: `loongshield`.
+- `command`: string. Current value: `seharden`.
+- `status`: `passed` when `exit_code` is `0`, otherwise `failed`.
+- `mode`: `scan` or `reinforce`.
+- `profile`: resolved profile id when available, otherwise the requested config value.
+- `level`: resolved profile level, or `all`.
+- `dry_run`: boolean.
+- `request`: object with `mode`, `config`, `profile`, `level`, `requested_level`, and `dry_run`.
+- `rules`: rule result list. Each item has `id`, `desc`, `status`, and optional `reason`.
+- `rule_count`: number of rule result items.
+- `summary`: object with `passed`, `fixed`, `failed`, `manual`, `dry_run_pending`, and `total`.
+- `manual_review`: manual-review entries for scan mode.
+- `manual_review_count`: number of manual-review entries.
+- `available_levels`: level ids when reporting invalid level selection.
+- `exit_code`: process exit code.
+- `error`: error message for CLI/profile/schema failures.
+
+Nullable fields are emitted as JSON `null`, not omitted. `rules`, `manual_review`, and `available_levels` are always JSON arrays when present as collections, including empty arrays. Consumers should still use `rule_count`, `manual_review_count`, and `summary` for counts.
 
 ## Exit Codes
 

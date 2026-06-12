@@ -164,12 +164,24 @@ function test_json_format_outputs_machine_readable_report()
         assert(decoded ~= nil, "Expected JSON output to decode: " .. tostring(err))
         assert(decoded.schema_version == 1, "Expected JSON schema version")
         assert(decoded.format == "json", "Expected JSON report to declare its format")
+        assert(decoded.tool == "loongshield", "Expected JSON report tool id")
+        assert(decoded.command == "seharden", "Expected JSON report command id")
+        assert(decoded.status == "failed", "Expected non-zero JSON report status")
         assert(decoded.profile == "agentos_baseline", "Expected profile id in JSON report")
         assert(decoded.level == "baseline", "Expected resolved level in JSON report")
+        assert(decoded.request.config == "agentos_baseline", "Expected requested config in JSON report")
+        assert(decoded.request.profile == "agentos_baseline", "Expected resolved profile in JSON request")
+        assert(decoded.request.level == "baseline", "Expected resolved level in JSON request")
+        assert(decoded.request.mode == "scan", "Expected request mode in JSON report")
+        assert(decoded.request.requested_level == cjson.null, "Expected missing requested level to be JSON null")
+        assert(decoded.rule_count == 1, "Expected rule count in JSON report")
         assert(decoded.summary.failed == 1, "Expected failed summary count in JSON report")
         assert(decoded.rules[1].id == "rule.1", "Expected rule id in JSON report")
         assert(decoded.rules[1].status == "FAIL", "Expected rule status in JSON report")
+        assert(decoded.manual_review_count == 1, "Expected manual review count in JSON report")
         assert(decoded.manual_review[1].area == "operator", "Expected manual review items in JSON report")
+        assert(decoded.available_levels == cjson.null, "Expected absent available levels to be JSON null")
+        assert(decoded.error == cjson.null, "Expected absent CLI error to be JSON null")
         assert(seen.config_name == "agentos_baseline", "Expected --config to reach profile.load")
         assert(seen.level == "baseline", "Expected default level to reach rule selection")
         assert(seen.manual_level == "baseline", "Expected default level to reach manual review filtering")
@@ -200,8 +212,79 @@ function test_json_format_parse_error_is_json()
         assert(decoded ~= nil, "Expected parse error output to be JSON")
         assert(decoded.schema_version == 1, "Expected JSON parse error schema version")
         assert(decoded.format == "json", "Expected JSON parse error format")
+        assert(decoded.tool == "loongshield", "Expected JSON parse error tool id")
+        assert(decoded.command == "seharden", "Expected JSON parse error command id")
+        assert(decoded.status == "failed", "Expected JSON parse error status")
         assert(decoded.exit_code == 1, "Expected JSON parse error exit code")
+        assert(decoded.profile == cjson.null, "Expected JSON parse error profile to be null")
+        assert(decoded.request.config == cjson.null, "Expected JSON parse error config to be null")
+        assert(decoded.request.requested_level == cjson.null, "Expected JSON parse error requested level to be null")
         assert(decoded.error == "Unknown option: --bogus", "Expected unknown option in JSON error")
+        assert(decoded.summary.total == 0, "Expected JSON parse error empty summary")
+        assert(decoded.rule_count == 0, "Expected JSON parse error empty rules")
+        assert(type(decoded.rules) == "table" and #decoded.rules == 0, "Expected JSON parse error rules to be []")
+        assert(type(decoded.manual_review) == "table" and #decoded.manual_review == 0,
+            "Expected JSON parse error manual_review to be []")
+        assert(decoded.available_levels == cjson.null, "Expected JSON parse error available levels to be null")
+    end)
+end
+
+function test_json_format_invalid_format_error_is_json()
+    local cjson = require("cjson.safe")
+
+    with_stubbed_cli({
+        profile = {
+            load = function() error("profile.load should not be called for invalid format") end,
+            get_rules_for_level = function() error("profile.get_rules_for_level should not be called") end,
+        },
+        engine = {
+            run = function() error("engine.run should not be called for invalid format") end,
+        }
+    }, function(cli)
+        local lines, ret = capture_print(function()
+            return cli.run({ "--format", "json", "--format", "xml" })
+        end)
+        local decoded = cjson.decode(table.concat(lines, "\n"))
+
+        assert(ret == 1, "Expected invalid format to return exit code 1")
+        assert(decoded ~= nil, "Expected invalid format output to be JSON")
+        assert(decoded.schema_version == 1, "Expected JSON schema version")
+        assert(decoded.format == "json", "Expected JSON format")
+        assert(decoded.status == "failed", "Expected failed status")
+        assert(decoded.error == "Unsupported output format 'xml'. Expected 'text' or 'json'.",
+            "Expected unsupported format error")
+        assert(decoded.rules ~= nil and #decoded.rules == 0, "Expected empty rules array")
+        assert(decoded.manual_review ~= nil and #decoded.manual_review == 0,
+            "Expected empty manual_review array")
+    end)
+end
+
+function test_json_format_mutually_exclusive_modes_is_json_contract()
+    local cjson = require("cjson.safe")
+
+    with_stubbed_cli({
+        profile = {
+            load = function() error("profile.load should not be called for mutually exclusive modes") end,
+            get_rules_for_level = function() error("profile.get_rules_for_level should not be called") end,
+        },
+        engine = {
+            run = function() error("engine.run should not be called for mutually exclusive modes") end,
+        }
+    }, function(cli)
+        local lines, ret = capture_print(function()
+            return cli.run({ "--scan", "--reinforce", "--format", "json" })
+        end)
+        local decoded = cjson.decode(table.concat(lines, "\n"))
+
+        assert(ret == 1, "Expected mutually exclusive modes to return exit code 1")
+        assert(decoded.schema_version == 1, "Expected JSON schema version")
+        assert(decoded.tool == "loongshield", "Expected JSON tool id")
+        assert(decoded.command == "seharden", "Expected JSON command id")
+        assert(decoded.status == "failed", "Expected failed status")
+        assert(decoded.rules ~= nil and #decoded.rules == 0, "Expected empty rules array")
+        assert(decoded.rule_count == 0, "Expected empty rule count")
+        assert(decoded.error == "Options --scan and --reinforce are mutually exclusive.",
+            "Expected mutually exclusive mode error")
     end)
 end
 
@@ -304,6 +387,47 @@ function test_invalid_level_lists_available_levels()
         assert(ret == 1, "Expected invalid level to return exit code 1")
         assert(output:find("Available levels for profile 'agentos_baseline': baseline, strict", 1, true),
             "Expected available level list in output")
+    end)
+end
+
+function test_json_format_invalid_level_lists_available_levels()
+    local cjson = require("cjson.safe")
+
+    with_stubbed_cli({
+        profile = {
+            load = function()
+                return {
+                    id = "agentos_baseline",
+                    levels = {
+                        { id = "baseline" },
+                        { id = "strict" }
+                    }
+                }
+            end,
+            get_rules_for_level = function()
+                return nil
+            end,
+        },
+        engine = {
+            run = function() error("engine.run should not be called when no rules are available") end,
+        }
+    }, function(cli)
+        local lines, ret = capture_print(function()
+            return cli.run({ "--config", "agentos_baseline", "--level", "missing", "--format", "json" })
+        end)
+        local decoded = cjson.decode(table.concat(lines, "\n"))
+
+        assert(ret == 1, "Expected invalid level to return exit code 1")
+        assert(decoded.schema_version == 1, "Expected JSON schema version")
+        assert(decoded.error:find("No rules available for level 'missing'.", 1, true),
+            "Expected invalid level error")
+        assert(decoded.request.config == "agentos_baseline", "Expected requested config")
+        assert(decoded.request.requested_level == "missing", "Expected requested level")
+        assert(decoded.available_levels[1] == "baseline", "Expected sorted available level")
+        assert(decoded.available_levels[2] == "strict", "Expected sorted available level")
+        assert(decoded.rules ~= nil and #decoded.rules == 0, "Expected empty rules array")
+        assert(decoded.manual_review ~= nil and #decoded.manual_review == 0,
+            "Expected empty manual_review array")
     end)
 end
 
